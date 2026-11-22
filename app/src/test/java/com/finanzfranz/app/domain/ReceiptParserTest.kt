@@ -99,4 +99,49 @@ class ReceiptParserTest {
         assertNull(r.source)
         assertEquals(400L, r.totalCents)
     }
+
+    // --- Fixes from the review (Nov 2026) ---
+
+    @Test fun thousandsSeparator() {
+        assertEquals(listOf(104900L), ReceiptParser.amounts("SUMME EUR 1.049,00"))
+        val r = ReceiptParser.parse("MediaMarkt\nFernseher 1.049,00\nSUMME EUR 1.049,00\nGirocard", today)
+        assertEquals(104900L, r.totalCents)
+        assertEquals(Src.ACCOUNT, r.source)
+    }
+
+    @Test fun paybackCardIsNotCardPayment() {
+        val text = """
+            dm-drogerie markt
+            Zahnpasta          1,95
+            SUMME EUR          1,95
+            BAR                5,00
+            Rückgeld           3,05
+            PAYBACK Karte: Sie hätten 2 Punkte
+        """.trimIndent()
+        assertEquals(Src.CASH, ReceiptParser.parse(text, today).source)
+    }
+
+    @Test fun cardWithZeroChangeStaysCard() {
+        val r = ReceiptParser.parse("Shop\nSumme 9,90\nKarte 9,90\nRückgeld 0,00", today)
+        assertEquals(Src.ACCOUNT, r.source)
+    }
+
+    @Test fun subtotalIsNotTotal() {
+        val r = ReceiptParser.parse("Restaurant Adria\nPizza 12,50\nSubtotal 12,50\nTrinkgeld 1,50\nTotal 14,00", today)
+        assertEquals(1400L, r.totalCents)
+    }
+
+    @Test fun nettoColumnIsNotNettoStore() {
+        val text = """
+            ARAL Tankstelle
+            Super E10          45,00
+            MwSt 19% Netto Steuer Brutto
+            SUMME              45,00
+        """.trimIndent()
+        assertEquals("ARAL", ReceiptParser.parse(text, today).store)
+        val bakery = ReceiptParser.parse("Bäckerei Schulz\nMwSt Netto Brutto\nSumme 3,20", today)
+        assertEquals("Bäckerei", bakery.store)
+        // real Netto supermarket still works
+        assertEquals("Netto", ReceiptParser.parse("NETTO Marken-Discount\nSumme 3,20", today).store)
+    }
 }

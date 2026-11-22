@@ -11,7 +11,9 @@ import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.core.content.FileProvider
+import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.repeatOnLifecycle
 import com.finanzfranz.app.data.Backup
 import com.finanzfranz.app.domain.ReceiptParser
 import com.finanzfranz.app.export.Exporter
@@ -21,6 +23,7 @@ import com.finanzfranz.app.ui.AppRoot
 import com.finanzfranz.app.ui.FinanzFranzTheme
 import com.finanzfranz.app.ui.MainViewModel
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -125,6 +128,15 @@ class MainActivity : ComponentActivity() {
             restore = { restoreLauncher.launch(arrayOf("application/json", "text/plain", "application/octet-stream", "*/*")) },
         )
         setContent { FinanzFranzTheme { AppRoot(vm, actions) } }
+        // App stays open over midnight: switch to the new day (books due fixed costs, new month view).
+        lifecycleScope.launch {
+            repeatOnLifecycle(Lifecycle.State.RESUMED) {
+                while (true) {
+                    delay(60_000)
+                    if (LocalDate.now() != vm.today) vm.refreshToday()
+                }
+            }
+        }
     }
 
     override fun onResume() {

@@ -19,7 +19,12 @@ object Money {
     fun parse(input: String): Long? {
         var s = input.trim().replace("€", "").replace(" ", "").replace(" ", "").replace("−", "-")
         if (s.isEmpty()) return null
-        s = if (s.contains(',')) s.replace(".", "").replace(',', '.') else s
+        s = when {
+            s.contains(',') -> s.replace(".", "").replace(',', '.')
+            // German thousands separator without decimals: "1.500" = 1500 €
+            Regex("""^-?\d{1,3}(\.\d{3})+$""").matches(s) -> s.replace(".", "")
+            else -> s
+        }
         val bd = s.toBigDecimalOrNull() ?: return null
         return try {
             bd.movePointRight(2).setScale(0, RoundingMode.HALF_UP).longValueExact()

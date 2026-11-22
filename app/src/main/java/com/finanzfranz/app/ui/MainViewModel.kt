@@ -150,6 +150,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     // ------------------------------------------------------------ Bookings
 
     fun newTx(kind: Int = Kind.EXPENSE) {
+        if (LocalDate.now() != today) refreshToday()
         txDraft = TxDraft(kind = kind, date = today, categoryId = if (kind == Kind.EXPENSE) null else null)
     }
 
@@ -176,8 +177,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             val cat = data.value.categories.firstOrNull { it.id == tx.categoryId }
             val ym = YearMonth.from(d.date)
             val others = data.value.txs.filter { it.id != tx.id }
-            val before = Ledger.monthStats(others, ym).byCategory[tx.categoryId] ?: 0L
-            cat?.let { Ledger.budgetWarning(it.name, it.budgetCents, before, cents) }
+            // When editing, the old amount already counted towards this budget – only the difference is new.
+            val old = data.value.txs.firstOrNull {
+                it.id == tx.id && tx.id != 0L && it.kind == Kind.EXPENSE && it.categoryId == tx.categoryId &&
+                    YearMonth.from(LocalDate.ofEpochDay(it.epochDay)) == ym
+            }?.amountCents ?: 0L
+            val before = (Ledger.monthStats(others, ym).byCategory[tx.categoryId] ?: 0L) + old
+            cat?.let { Ledger.budgetWarning(it.name, it.budgetCents, before, cents - old) }
         } else null
         viewModelScope.launch { repo.saveTx(tx) }
         txDraft = null
@@ -225,16 +231,22 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         val cents = Money.parse(d.amount)
         if (d.name.isBlank()) { message = "Bitte einen Namen eingeben"; return false }
         if (cents == null || cents <= 0) { message = "Bitte einen gültigen Betrag eingeben"; return false }
-        val base = d.original
-        val dateChanged = base == null || d.nextDue != d.originalNextDue || d.intervalMonths != base.intervalMonths
-        val f = FixedCost(
-            id = d.id, name = d.name.trim(), amountCents = cents, source = d.source,
-            firstDueEpochDay = if (dateChanged) d.nextDue.toEpochDay() else base!!.firstDueEpochDay,
-            intervalMonths = d.intervalMonths,
-            bookedCount = if (dateChanged) 0 else base!!.bookedCount,
-            active = d.active, income = d.income,
-        )
         viewModelScope.launch {
+            // Read the current state from the database, not the snapshot from when the editor was opened:
+            // an automatic booking may have happened in between (otherwise it would be booked twice).
+            val base = if (d.isNew) null else repo.dao.fixedNow().firstOrNull { it.id == d.id }
+            val dateChanged = base == null || d.nextDue != d.originalNextDue || d.intervalMonths != base.intervalMonths
+            var f = FixedCost(
+                id = d.id, name = d.name.trim(), amountCents = cents, source = d.source,
+                firstDueEpochDay = if (dateChanged) d.nextDue.toEpochDay() else base!!.firstDueEpochDay,
+                intervalMonths = d.intervalMonths,
+                bookedCount = if (dateChanged) 0 else base!!.bookedCount,
+                active = d.active, income = d.income,
+            )
+            // Paused -> active again: skip the dates that fell into the pause instead of booking them afterwards.
+            if (base != null && !base.active && d.active && !dateChanged) {
+                f = f.copy(bookedCount = Schedule.firstIndexNotBefore(f, today))
+            }
             repo.saveFixed(f)
             // If the first date is today or in the past, book it right away.
             val n = repo.bookDueFixedCosts(today)

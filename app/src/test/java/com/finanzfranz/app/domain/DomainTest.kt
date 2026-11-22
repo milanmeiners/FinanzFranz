@@ -20,6 +20,8 @@ class DomainTest {
         assertEquals(1250L, Money.parse("12.50"))
         assertEquals(123456L, Money.parse("1.234,56"))
         assertEquals(-300L, Money.parse("-3"))
+        assertEquals(150000L, Money.parse("1.500"))
+        assertEquals(1230000L, Money.parse("12.300"))
         assertEquals(1999L, Money.parse("19,99 €"))
         assertNull(Money.parse("abc"))
         assertNull(Money.parse(""))
@@ -89,5 +91,16 @@ class DomainTest {
         assertTrue(Ledger.budgetWarning("Essen", 10000, 9000, 1500)!!.startsWith("Budget"))
         assertNull(Ledger.budgetWarning("Essen", 10000, 11000, 1500)) // already over, don't nag again
         assertNull(Ledger.budgetWarning("Essen", 10000, 1000, 1000))
+    }
+
+    @Test fun reactivatedSkipsPausedDates() {
+        // Netflix on the 5th, booked until January, paused, reactivated on 10 May
+        val netflix = FixedCost(id = 1, name = "Netflix", amountCents = 1399, firstDueEpochDay = d("2027-01-05").toEpochDay(), bookedCount = 1)
+        val k = Schedule.firstIndexNotBefore(netflix, d("2027-05-10"))
+        assertEquals(d("2027-06-05"), Schedule.dueAt(netflix, k))
+        assertTrue(Schedule.dueUntil(netflix.copy(bookedCount = k), d("2027-05-10")).isEmpty())
+        // reactivated exactly on the due day: that day is still booked
+        val k2 = Schedule.firstIndexNotBefore(netflix, d("2027-05-05"))
+        assertEquals(listOf(d("2027-05-05")), Schedule.dueUntil(netflix.copy(bookedCount = k2), d("2027-05-05")))
     }
 }

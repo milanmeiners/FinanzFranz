@@ -41,6 +41,13 @@ object Schedule {
         return out
     }
 
+    /** Index of the first occurrence (from [FixedCost.bookedCount] on) that is on or after [day]. */
+    fun firstIndexNotBefore(fc: FixedCost, day: LocalDate): Int {
+        var k = fc.bookedCount
+        while (k < fc.bookedCount + 10_000 && dueAt(fc, k).isBefore(day)) k++
+        return k
+    }
+
     /** Amount per month (yearly 120 € -> 10 €). */
     fun monthlyShare(fc: FixedCost): Long = Math.round(fc.amountCents.toDouble() / fc.intervalMonths)
 

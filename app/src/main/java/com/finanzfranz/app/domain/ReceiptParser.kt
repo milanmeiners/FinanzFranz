@@ -24,17 +24,25 @@ data class ReceiptResult(
  * Pure Kotlin, so it can be unit-tested without a device.
  */
 object ReceiptParser {
-    private val amountRx = Regex("""(?<![\d.,])(-?\d{1,4})\s?[,.]\s?(\d{2})(?![\d]|[.,]\d)""")
+    private val amountRx = Regex("""(?<![\d.,])(-?\d{1,3}(?:\.\d{3})+|-?\d{1,4})\s?[,.]\s?(\d{2})(?![\d]|[.,]\d)""")
     private val dateRx = Regex("""(?<!\d)(\d{1,2})[./-](\d{1,2})[./-](\d{4}|\d{2})(?!\d)""")
 
     /** Keywords for the total, best first. */
     private val totalKeys = listOf("ZU ZAHLEN", "ZUZAHLEN", "GESAMTBETRAG", "ENDBETRAG", "GESAMTSUMME", "SUMME", "GESAMT", "TOTAL", "BETRAG")
-    private val notTotal = listOf("MWST", "MWST.", "NETTO", "STEUER", "UST", "ZWISCHENSUMME", "GEGEBEN", "CKGELD", "ZURUCK", "ZURÜCK", "RABATT", "PFAND")
+    private val notTotal = listOf("MWST", "MWST.", "NETTO", "STEUER", "UST", "ZWISCHENSUMME", "GEGEBEN", "CKGELD", "ZURUCK", "ZURÜCK", "RABATT", "PFAND", "SUBTOTAL", "SUB-TOTAL", "SUB TOTAL")
     private val paidKeys = listOf("GEGEBEN", "CKGELD", "ZURUCK", "ZURÜCK", "WECHSELGELD")
 
     private val cardKeys = listOf("GIROCARD", "EC-KARTE", "EC KARTE", "ECKARTE", "KARTENZAHLUNG", "KARTE", "VISA", "MASTERCARD",
         "MAESTRO", "KONTAKTLOS", "DEBIT", "APPLE PAY", "GOOGLE PAY", "PAYPAL", "V PAY", "VPAY", "AMEX", "KREDITKARTE", "EC-CASH", "ELECTRONIC CASH")
+    /** "Karte" alone only counts as card payment if it is not a loyalty card (Payback, Kundenkarte ...). */
+    private val plainCardRx = Regex("""\bKARTE\b""")
+    private val loyaltyKeys = listOf("PAYBACK", "KUNDEN", "DEUTSCHLANDCARD", "BONUS", "PUNKTE", "LIDL PLUS", "TREUE")
     private val cashRx = Regex("""\bBAR\b|BARGELD|BARZAHLUNG|GEGEBEN|CKGELD|WECHSELGELD""")
+    /** Lines that prove cash payment: money given, or change > 0. */
+    private val givenRx = Regex("""GEGEBEN""")
+    private val changeRx = Regex("""CKGELD|WECHSELGELD|ZURUCK|ZURÜCK""")
+    /** Tax block columns – never a store name ("Netto" column vs. Netto supermarket). */
+    private val taxLineRx = Regex("""MWST|STEUER|BRUTTO|\bUST\b|%""")
 
     private const val FOOD = "Essen & Trinken"
     private const val LEISURE = "Freizeit"
@@ -66,8 +74,14 @@ object ReceiptParser {
         val date = findDate(up, today)
         val (store, hint) = findStore(lines, up)
         val all = up.joinToString("\n")
+        val paidCash = up.any { givenRx.containsMatchIn(it) } ||
+            up.any { changeRx.containsMatchIn(it) && (amounts(it).lastOrNull() ?: 0L) > 0L }
+        val paidCard = up.any { u ->
+            cardKeys.any { u.contains(it) } || (plainCardRx.containsMatchIn(u) && loyaltyKeys.none { u.contains(it) })
+        }
         val source = when {
-            cardKeys.any { all.contains(it) } -> Src.ACCOUNT
+            paidCash -> Src.CASH
+            paidCard -> Src.ACCOUNT
             cashRx.containsMatchIn(all) -> Src.CASH
             else -> null
         }
@@ -77,7 +91,7 @@ object ReceiptParser {
     private fun normalize(s: String) = s.uppercase().replace(Regex("\\s+"), " ").trim()
 
     fun amounts(s: String): List<Long> = amountRx.findAll(s).mapNotNull { m ->
-        val euros = m.groupValues[1].toLongOrNull() ?: return@mapNotNull null
+        val euros = m.groupValues[1].replace(".", "").toLongOrNull() ?: return@mapNotNull null
         val cents = m.groupValues[2].toLong()
         if (euros < 0) null else euros * 100 + cents
     }.toList()
@@ -123,7 +137,7 @@ object ReceiptParser {
     }
 
     private fun findStore(lines: List<OcrLine>, up: List<String>): Pair<String?, String?> {
-        val head = up.take(12)
+        val head = up.take(12).filterNot { taxLineRx.containsMatchIn(it) }
         for ((key, cat) in stores) {
             val rx = Regex("""(?<![A-ZÄÖÜ])${Regex.escape(key)}(?![A-ZÄÖÜ])""")
             if (head.any { rx.containsMatchIn(it) }) return pretty(key) to cat
